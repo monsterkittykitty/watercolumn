@@ -33,6 +33,10 @@ class WaterColumnPlot:
         self.across_track_width = across_track_width
         self.bin_height_percent_depth = bin_height_percent_depth
 
+        # Maximum acceptable gap in navigation data to interpolate through (seconds), default 25 Hz (0.04 sec):
+        # TODO: Make this command-line configurable:
+        self.MAX_NAV_GAP_SEC = 0.04
+
     # Create file list if input path is directory
     def create_file_list(self, input_file):
         temp_list = []
@@ -89,30 +93,39 @@ class WaterColumnPlot:
         time_SKM_array = []
 
         for offset in SKM_offsets:
-            k.FID.seek(0, offset)
+            k.FID.seek(offset, 0)
             dg_SKM = k.read_EMdgmSKM()
             length_sample_array = dg_SKM['infoPart']['numSamplesArray']
 
             time_KMB_array = []
 
             for i in range(length_sample_array):
-                time_KMB = (dg_SKM['samples'][i]['KMdefault']['time_sec'] +
-                            (dg_SKM['samples'][i]['KMdefault']['time_nanosec'] / 1.0E9))
+                time_KMB = (dg_SKM['sample']['KMdefault']['time_sec'][i] +
+                            (dg_SKM['sample']['KMdefault']['time_nanosec'][i] / 1.0E9))
                 time_KMB_array.append(time_KMB)
 
-                # Error checking: Do timestamps of KMB datagrams always appear in ascending order or can they appear out of order?!
-                sorted_time_KMB_array = time_KMB_array.sort()
-                if sorted_time_KMB_array != time_KMB_array:
-                    # TODO: If this prints we need to do something different with indexing/accessing KMB datagrams.
-                    #  This is used when comparing MWC timestamps to KMB position/attitude datagrams for interpolation...
-                    #  Probably do something more robust here anyway.
-                    print("ERROR: KMB datagrams appear out of order.")
-                    exit()
-
+            # Error checking: Do timestamps of KMB datagrams always appear in ascending order or can they appear out of order?!
+            sorted_time_KMB_array = sorted(time_KMB_array, key=float)
+            if sorted_time_KMB_array != time_KMB_array:
+                # TODO: If this prints we need to do something different with indexing/accessing KMB datagrams.
+                #  This is used when comparing MWC timestamps to KMB position/attitude datagrams for interpolation...
+                print("sorted_KMB_array: ", sorted_time_KMB_array)
+                print("unsorted_KMB_array: ", time_KMB_array)
+                #  Probably do something more robust here anyway.
+                print("ERROR: KMB datagrams appear out of order.")
+                exit()
 
             time_SKM_array.append(time_KMB_array)
 
         return time_SKM_array
+
+    def interpolate(self, x1, y1, x2, y2, x3):
+        """
+        Linear interpolation.
+        """
+        y3 = y1 + ((x3 - x1) / (x2 - x1)) * (y2 - y1)
+        return y3
+
 
     def extract_wc_from_file(self):
         # TODO: Test this with .kmwcd files
@@ -125,11 +138,14 @@ class WaterColumnPlot:
             SKMOffsets = [x for x, y in zip(k.msgoffset, k.msgtype) if y == "b'#SKM'"]
             print("Num SKM datagrams: ", len(SKMOffsets))  # 38
 
+            print("SKMOffsets: ", SKMOffsets)
+
             time_SKM_array, datetime_SKM_array = self.extract_dg_timestamps(k, SKMOffsets)
 
             # TODO: Maybe use this instead:
             time_SKM_KMB_array = self.extract_SKM_KMB_timestamps(k, SKMOffsets)
-
+            print("len time_SKM_KMB_array: ", len(time_SKM_KMB_array))
+            print("time_SKM_KMB_array: ", time_SKM_KMB_array)
 
             # print("len(time_SKM_array): ", len(time_SKM_array)) #38
             # print("time_SKM_array: ", time_SKM_array)
@@ -209,20 +225,71 @@ class WaterColumnPlot:
                 datetime_MWC_array.append(datetime_MWC)
 
                 # Find corresponding SKM datagram:
-                SKM_index = None
+                SKM_index1 = None
+                SKM_index2 = None
                 # TODO: probably a better way to search? Binary search?
-                for i in range(len(time_SKM_array) - 1):
+                for i in range(len(time_SKM_KMB_array) - 1):
                     #if time_MWC >= time_SKM_array[i] and time_MWC < time_SKM_array[i + 1]:
                     if time_SKM_KMB_array[i][0] <= time_MWC < time_SKM_KMB_array[i + 1][0]:
-                        SKM_index = i
+                        SKM_index1 = SKM_index2 = i
                         break
 
-                if SKM_index is None:
+                if SKM_index1 is None:
                     print("ERROR finding matching SKM datagram.")
                     exit()
 
-                print("SKM_index: ", SKM_index)
+                KMB_index1 = None
+                KMB_index2 = None
+                # TODO: probably a better way to search? Binary search?
+                for i in range(len(time_SKM_KMB_array[SKM_index1]) - 1):
+                    if time_SKM_KMB_array[SKM_index1][i] <= time_MWC < time_SKM_KMB_array[SKM_index1][i + 1]:
+                        # Ensure gap to interpolate through is not too big:
+                        if ((time_SKM_KMB_array[SKM_index1][i + 1] - time_SKM_KMB_array[SKM_index1][i]) < self.MAX_NAV_GAP_SEC):
+                            KMB_index1 = i
+                            KMB_index2 = i + 1
+                        else:
+                            print("ERROR: Nav gap too large to interpolate!")
+                        break
 
+                if KMB_index1 is None:
+                    # This is the case where the MWC timestamp falls between SKM datagrams:
+                    if (time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 1]
+                            <= time_MWC < time_SKM_KMB_array[SKM_index1 + 1][0]):
+                        SKM_index2 = SKM_index1 + 1
+                        KMB_index1 = len(time_SKM_KMB_array[SKM_index1]) - 1
+                        KMB_index2 = 0
+
+                    else:
+                        # TODO: Handle this in some elegant way. Drop that ping and move on to the next one or something...
+                        print("time_MWC: ", time_MWC)
+                        print("time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 2]: ",
+                              time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 2])
+                        print("time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 1]: ",
+                              time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 1])
+                        print("time_SKM_KMB_array[SKM_index1 + 1][0]: ",
+                              time_SKM_KMB_array[SKM_index1 + 1][0])
+                        print("ERROR finding matching KMB datagram.")
+                        exit()
+
+                print("SKM_index1: ", SKM_index1)
+                print("KMB_index1: ", KMB_index1)
+
+                # TODO: Not sure if it's better to re-access the file or to store all pitch values in an array?
+                # Interpolate pitch. (x,y) points are (time, pitch):
+                k.FID.seek(SKMOffsets[SKM_index1], 0)
+                dg_SKM = k.read_EMdgmSKM()
+                x1 = time_SKM_KMB_array[SKM_index1][KMB_index1]
+                y1 = dg_SKM['sample']['KMdefault']['pitch_deg'][KMB_index1]
+                x2 = time_SKM_KMB_array[SKM_index2][KMB_index2]
+                y2 = dg_SKM['sample']['KMdefault']['pitch_deg'][KMB_index2]
+                interpolated_pitch = self.interpolate(x1, y1, x2, y2, time_MWC)
+
+                # print("y1, pitch: ", y1)
+                # print("x1, time: ", x1)
+                # print("y2, pitch: ", y2)
+                # print("x2, time: ", x2)
+                # print("y3, pitch: ", interpolated_pitch)
+                # print("x3, time: ", time_MWC)
 
 
 
@@ -283,6 +350,15 @@ class WaterColumnPlot:
                         beam_point_angle_re_vertical = self.dg_MWC['beamData']['beamPointAngReVertical_deg'][beam]
                         # Along-track angle:
                         tilt_angle_re_tx_deg = self.tilt_angle_re_tx_deg[self.dg_MWC['beamData']['beamTxSectorNum'][beam]]
+                        tilt_angle_re_vertical_deg = tilt_angle_re_tx_deg + interpolated_pitch
+
+                        print("tilt_angle_re_tx_deg: ", tilt_angle_re_tx_deg)
+                        # print("interpolated_pitch: ", interpolated_pitch)
+                        # print("tilt_angle_re_vertical_deg: ", tilt_angle_re_vertical_deg)
+
+
+
+
 
                         detected_range = self.dg_MWC['beamData']['detectedRangeInSamples'][beam] # Index in sampleAmplitude05dB array where bottom detected
 
@@ -294,12 +370,12 @@ class WaterColumnPlot:
 
                             # Across-track distance
                             x = (range_to_wc_data_point * math.sin(math.radians(beam_point_angle_re_vertical))
-                                * math.cos((math.radians(tilt_angle_re_tx_deg))))
+                                * math.cos((math.radians(tilt_angle_re_vertical_deg))))
 
-                            test_y = (range_to_wc_data_point * math.cos(math.radians(beam_point_angle_re_vertical))) + self.heave
+                            test_y = (range_to_wc_data_point * math.cos(math.radians(beam_point_angle_re_vertical))) - self.heave
 
                             y = (range_to_wc_data_point * math.cos(math.radians(beam_point_angle_re_vertical))
-                                 * math.cos(math.radians(tilt_angle_re_tx_deg))) + self.heave
+                                 * math.cos(math.radians(tilt_angle_re_vertical_deg))) - self.heave
 
                             # if i == detected_range:
                             #     print('test_x: ', test_x)
