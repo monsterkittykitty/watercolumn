@@ -102,20 +102,24 @@ class WaterColumnPlot:
             for i in range(length_sample_array):
                 time_KMB = (dg_SKM['sample']['KMdefault']['time_sec'][i] +
                             (dg_SKM['sample']['KMdefault']['time_nanosec'][i] / 1.0E9))
-                time_KMB_array.append(time_KMB)
+                # Pair #KMB timestamp with its index incase they appear in the file out of order.
+                time_KMB_array.append([time_KMB, i])
+
+
 
             # Error checking: Do timestamps of KMB datagrams always appear in ascending order or can they appear out of order?!
-            sorted_time_KMB_array = sorted(time_KMB_array, key=float)
-            if sorted_time_KMB_array != time_KMB_array:
-                # TODO: If this prints we need to do something different with indexing/accessing KMB datagrams.
-                #  This is used when comparing MWC timestamps to KMB position/attitude datagrams for interpolation...
-                print("sorted_KMB_array: ", sorted_time_KMB_array)
-                print("unsorted_KMB_array: ", time_KMB_array)
-                #  Probably do something more robust here anyway.
-                print("ERROR: KMB datagrams appear out of order.")
-                exit()
+            # sorted_time_KMB_array = sorted(time_KMB_array, key=float)
+            # if sorted_time_KMB_array != time_KMB_array:
+            #     # TODO: If this prints we need to do something different with indexing/accessing KMB datagrams.
+            #     #  This is used when comparing MWC timestamps to KMB position/attitude datagrams for interpolation...
+            #     print("sorted_KMB_array: ", sorted_time_KMB_array)
+            #     print("unsorted_KMB_array: ", time_KMB_array)
+            #     #  Probably do something more robust here anyway.
+            #     print("ERROR: KMB datagrams appear out of order.")
+            #     exit()
 
-            time_SKM_array.append(time_KMB_array)
+            # Sort #KMB array based on timestamps before adding to #SKM array.
+            time_SKM_array.append(time_KMB_array.sort(key=lambda x: x[0]))
 
         return time_SKM_array
 
@@ -126,6 +130,18 @@ class WaterColumnPlot:
         y3 = y1 + ((x3 - x1) / (x2 - x1)) * (y2 - y1)
         return y3
 
+    def sort_dataframe_by_index(self, df, datagram_type=None):
+        """
+        Sort pandas dataframe by index value; optionally filter by datagram type.
+        :param df: Pandas dataframe.
+        :param datagram_type: Kongsberg datagram type. EX: #MRZ, #MWC...
+        :return: Pandas dataframe sorted by index value; optionally filtered by datagram type.
+        """
+        if datagram_type is None:
+            return df.sort_index()
+        else:
+            filtered_df = df[df['MessageType'].map(lambda x: x.strip("'b")) == datagram_type]
+            return filtered_df.sort_index()
 
     def extract_wc_from_file(self):
         # TODO: Test this with .kmwcd files
@@ -134,80 +150,23 @@ class WaterColumnPlot:
             k = KMALL.kmall(fp)
             k.index_file()
 
-            # Get the file byte count offset for each SKM (attitude and velocity) datagram.
-            SKMOffsets = [x for x, y in zip(k.msgoffset, k.msgtype) if y == "b'#SKM'"]
-            print("Num SKM datagrams: ", len(SKMOffsets))  # 38
+            # Extract only #MWC and #SKM datagrams from k.Index and sort by timestamp:
+            sorted_df_MWC = self.sort_dataframe_by_index(k.Index, "#MWC")
+            sorted_df_SKM = self.sort_dataframe_by_index(k.Index, "#SKM")
 
-            print("SKMOffsets: ", SKMOffsets)
+            # Extract #MWC and #SKM file offsets:
+            MWCOffsets = sorted_df_MWC['ByteOffset'].tolist()
+            SKMOffsets = sorted_df_SKM['ByteOffset'].tolist()
 
-            time_SKM_array, datetime_SKM_array = self.extract_dg_timestamps(k, SKMOffsets)
+            timestamps_SKM_KMB = self.extract_SKM_KMB_timestamps(k, SKMOffsets)
 
-            # TODO: Maybe use this instead:
-            time_SKM_KMB_array = self.extract_SKM_KMB_timestamps(k, SKMOffsets)
-            print("len time_SKM_KMB_array: ", len(time_SKM_KMB_array))
-            print("time_SKM_KMB_array: ", time_SKM_KMB_array)
-
-            # print("len(time_SKM_array): ", len(time_SKM_array)) #38
-            # print("time_SKM_array: ", time_SKM_array)
-            #
-            # print("len(datetime_SKM_array): ", len(datetime_SKM_array)) #38
-            # print("datetime_SKM_array: ", datetime_SKM_array)
-            # exit()
-
-            '''   
-            # Kongsberg: "Number of KM binary sensor samples added in this datagram."
-            self.num_samples_array = self.dg_SKM['infoPart']['numSamplesArray']
-            print('num_samples_array: ', self.num_samples_array)  #101
-
-
-
-            for sample in range(self.num_samples_array):  # 0 to self.num_samples_array - 1
-                time_sec_KMB = self.dg_SKM['sample']['KMdefault']['time_sec'][sample]
-                #print('time_sec: ', time_sec)
-                time_nanosec_KMB = self.dg_SKM['sample']['KMdefault']['time_nanosec'][sample]
-
-                time_KMB = time_sec_KMB + (time_nanosec_KMB * (10.0 ** -9))
-
-                #print('time_KMB: ', time_KMB)
-
-            #print(len(self.dg_SKM['sample']['KMdefault']['dgmType'])) #101
-            exit()
-            '''
-
-
-
-
-
-
-
-
-
-
-
-
-            # Get the file byte count offset for each MWC (watercolumn) datagram.
-            MWCOffsets = [x for x, y in zip(k.msgoffset, k.msgtype) if y == "b'#MWC'"]
-            #print("Num MWC datagrams: ", len(MWCOffsets))
-
-            # TODO: probably don't need this here:
-            time_MWC_array, datetime_MWC_array = self.extract_dg_timestamps(k, MWCOffsets)
-
-            # print("len(time_MWC_array): ", len(time_MWC_array))  #
-            # print("time_MWC_array: ", time_SKM_array)
-            #
-            # print("len(datetime_MWC_array): ", len(datetime_MWC_array)) #
-            # print("datetime_MWC_array: ", datetime_MWC_array)
-            # exit()
-            # time_sec_MWC = self.dg_MWC['header']['time_sec']
-            # time_nanosec_MWC = self.dg_MWC['header']['time_nanosec']
-            # time_MWC = time_sec_MWC + (time_nanosec_MWC * (10 ** -9))
-
-            count = 0
+            #count = 0
             fullFile_avergedWaterColumnArray = []
             full_file_samples_per_bin_array = []
             full_file_beam_number_array = []
 
             #for offset in MWCOffsets:  # For each MWC datagram:
+            # for offset in MWCOffsets[0:4]:  # Only two pings to evaluate dual swath
             # TODO: FOR TESTING: (Use only a subset of MWC records:)
             for offset in MWCOffsets[0:(int((len(MWCOffsets) / 6)))]:  # Each MWCOffset corresponds to a ping
                 k.FID.seek(offset, 0)  # Find start of MWC datagram
@@ -228,9 +187,9 @@ class WaterColumnPlot:
                 SKM_index1 = None
                 SKM_index2 = None
                 # TODO: probably a better way to search? Binary search?
-                for i in range(len(time_SKM_KMB_array) - 1):
+                for i in range(len(timestamps_SKM_KMB) - 1):
                     #if time_MWC >= time_SKM_array[i] and time_MWC < time_SKM_array[i + 1]:
-                    if time_SKM_KMB_array[i][0] <= time_MWC < time_SKM_KMB_array[i + 1][0]:
+                    if timestamps_SKM_KMB[i][0] <= time_MWC < timestamps_SKM_KMB[i + 1][0]:
                         SKM_index1 = SKM_index2 = i
                         break
 
@@ -241,10 +200,10 @@ class WaterColumnPlot:
                 KMB_index1 = None
                 KMB_index2 = None
                 # TODO: probably a better way to search? Binary search?
-                for i in range(len(time_SKM_KMB_array[SKM_index1]) - 1):
-                    if time_SKM_KMB_array[SKM_index1][i] <= time_MWC < time_SKM_KMB_array[SKM_index1][i + 1]:
+                for i in range(len(timestamps_SKM_KMB[SKM_index1]) - 1):
+                    if timestamps_SKM_KMB[SKM_index1][i] <= time_MWC < timestamps_SKM_KMB[SKM_index1][i + 1]:
                         # Ensure gap to interpolate through is not too big:
-                        if ((time_SKM_KMB_array[SKM_index1][i + 1] - time_SKM_KMB_array[SKM_index1][i]) < self.MAX_NAV_GAP_SEC):
+                        if ((timestamps_SKM_KMB[SKM_index1][i + 1] - timestamps_SKM_KMB[SKM_index1][i]) < self.MAX_NAV_GAP_SEC):
                             KMB_index1 = i
                             KMB_index2 = i + 1
                         else:
@@ -253,21 +212,21 @@ class WaterColumnPlot:
 
                 if KMB_index1 is None:
                     # This is the case where the MWC timestamp falls between SKM datagrams:
-                    if (time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 1]
-                            <= time_MWC < time_SKM_KMB_array[SKM_index1 + 1][0]):
+                    if (timestamps_SKM_KMB[SKM_index1][len(timestamps_SKM_KMB[SKM_index1]) - 1]
+                            <= time_MWC < timestamps_SKM_KMB[SKM_index1 + 1][0]):
                         SKM_index2 = SKM_index1 + 1
-                        KMB_index1 = len(time_SKM_KMB_array[SKM_index1]) - 1
+                        KMB_index1 = len(timestamps_SKM_KMB[SKM_index1]) - 1
                         KMB_index2 = 0
 
                     else:
                         # TODO: Handle this in some elegant way. Drop that ping and move on to the next one or something...
                         print("time_MWC: ", time_MWC)
-                        print("time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 2]: ",
-                              time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 2])
-                        print("time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 1]: ",
-                              time_SKM_KMB_array[SKM_index1][len(time_SKM_KMB_array[SKM_index1]) - 1])
-                        print("time_SKM_KMB_array[SKM_index1 + 1][0]: ",
-                              time_SKM_KMB_array[SKM_index1 + 1][0])
+                        print("timestamps_SKM_KMB[SKM_index1][len(timestamps_SKM_KMB[SKM_index1]) - 2]: ",
+                              timestamps_SKM_KMB[SKM_index1][len(timestamps_SKM_KMB[SKM_index1]) - 2])
+                        print("timestamps_SKM_KMB[SKM_index1][len(timestamps_SKM_KMB[SKM_index1]) - 1]: ",
+                              timestamps_SKM_KMB[SKM_index1][len(timestamps_SKM_KMB[SKM_index1]) - 1])
+                        print("timestamps_SKM_KMB[SKM_index1 + 1][0]: ",
+                              timestamps_SKM_KMB[SKM_index1 + 1][0])
                         print("ERROR finding matching KMB datagram.")
                         exit()
 
@@ -278,9 +237,9 @@ class WaterColumnPlot:
                 # Interpolate pitch. (x,y) points are (time, pitch):
                 k.FID.seek(SKMOffsets[SKM_index1], 0)
                 dg_SKM = k.read_EMdgmSKM()
-                x1 = time_SKM_KMB_array[SKM_index1][KMB_index1]
+                x1 = timestamps_SKM_KMB[SKM_index1][KMB_index1]
                 y1 = dg_SKM['sample']['KMdefault']['pitch_deg'][KMB_index1]
-                x2 = time_SKM_KMB_array[SKM_index2][KMB_index2]
+                x2 = timestamps_SKM_KMB[SKM_index2][KMB_index2]
                 y2 = dg_SKM['sample']['KMdefault']['pitch_deg'][KMB_index2]
                 interpolated_pitch = self.interpolate(x1, y1, x2, y2, time_MWC)
 

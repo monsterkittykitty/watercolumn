@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 
 class KongsbergWaterColumn(watercolumn.WaterColumn):
 
-    def __init__(self, input_file_or_directory=None, swath_width_percent=None, swath_width_m=None,
-                 num_nadir_beams=None, along_track_swaths=None, dual_swath=True, bin_height_percent_depth=None,
-                 bin_height_m=None, max_nav_gap_sec=0.04, file_handler_type="snapshot_directory"):
+    def __init__(self, input_file_or_directory=None, file_handler_type="snapshot", udp_ip=None, swath_width_percent=None,
+                 swath_width_m=None, num_nadir_beams=None, along_track_swaths=None, dual_swath=True,
+                 bin_height_percent=None, bin_height_m=None, max_nav_gap_sec=0.04, write_directory=None):
 
-        super().__init__(input_file_or_directory, swath_width_percent, swath_width_m,
-                       num_nadir_beams, along_track_swaths, bin_height_percent_depth,
-                       bin_height_m, max_nav_gap_sec, file_handler_type)
+        super().__init__(input_file_or_directory, file_handler_type, udp_ip, swath_width_percent, swath_width_m,
+                       num_nadir_beams, along_track_swaths, bin_height_percent, bin_height_m, max_nav_gap_sec,
+                         write_directory)
 
         # If dual swath mode is active, average pings from dual swath (defaults to True).
         # NOTE: along_track_swaths will take priority over dual_swath
@@ -166,6 +166,7 @@ if __name__ == '__main__':
 
     # Defaults:
     _input_file_or_directory = None
+    _udp_ip = None
 
     _swath_width_percent = None  # 10
     _swath_width_m = None
@@ -174,10 +175,12 @@ if __name__ == '__main__':
     _along_track_swaths = None
     _dual_swath = False
 
-    _bin_height_percent_depth = None  # 1
+    _bin_height_percent = None  # 1
     _bin_height_m = None
 
     _max_nav_gap_sec = None
+
+    _write_directory = None
 
     # Read command line args for files/directory, num_nadir_beams:
     try:
@@ -245,7 +248,7 @@ if __name__ == '__main__':
         elif opt in ("-d", "--dual_swath"):
             _dual_swath = True
         elif opt in ("-b, --bin_percent"):
-            _bin_height_percent_depth = int(arg)
+            _bin_height_percent = int(arg)
         elif opt in ("-a, --bin_m"):
             _bin_height_m = int(arg)
         elif opt in ("g", "--nav_gap"):
@@ -255,6 +258,6 @@ if __name__ == '__main__':
         print("Must enter file or directory: watercolumnplot.py -f <file_or_directory>")
         sys.exit()
 
-    kongsberg_wc = KongsbergWaterColumn(_input_file_or_directory, _swath_width_percent, _swath_width_m,
-                                        _num_nadir_beams, _along_track_swaths, _dual_swath, _bin_height_percent_depth,
-                                        _bin_height_m, _max_nav_gap_sec, "snapshot_directory")
+    kongsberg_wc = KongsbergWaterColumn(_input_file_or_directory, "snapshot", _udp_ip, _swath_width_percent, _swath_width_m,
+                                        _num_nadir_beams, _along_track_swaths, _dual_swath, _bin_height_percent,
+                                        _bin_height_m, _max_nav_gap_sec, _write_directory)
